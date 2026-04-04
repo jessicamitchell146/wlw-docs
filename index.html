@@ -1,0 +1,1605 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<script>
+// ── Static Mode Shim ──────────────────────────────────────────────
+// Intercepts fetch() calls to /api/* and serves from bundled data.json
+(function() {
+  let _data = null;
+  const _dataPromise = fetch('data.json').then(r => r.json()).then(d => { _data = d; return d; });
+
+  const _origFetch = window.fetch;
+  window.fetch = async function(url, opts) {
+    if (typeof url === 'string' && url.startsWith('/api/')) {
+      const data = _data || await _dataPromise;
+      const u = new URL(url, location.origin);
+
+      if (u.pathname === '/api/sources') {
+        return Response.json(data.sources);
+      }
+      if (u.pathname === '/api/md-list') {
+        const source = u.searchParams.get('source');
+        if (source && data.fileLists[source]) {
+          return Response.json(data.fileLists[source]);
+        }
+        const all = [];
+        for (const [name, docs] of Object.entries(data.fileLists)) {
+          all.push(...docs.map(d => ({ ...d, source: name })));
+        }
+        return Response.json(all);
+      }
+      if (u.pathname === '/api/md-read') {
+        const source = u.searchParams.get('source');
+        const path = u.searchParams.get('path');
+        const key = source + '::' + path;
+        if (data.fileContents[key]) {
+          return Response.json(data.fileContents[key]);
+        }
+        return Response.json({ ok: false, error: 'File not found' }, { status: 404 });
+      }
+      if (u.pathname === '/api/recent') {
+        return Response.json(data.recent);
+      }
+      if (u.pathname === '/api/calendar') {
+        return Response.json(data.calendar);
+      }
+      if (u.pathname === '/api/your-day') {
+        return Response.json(data.yourDay);
+      }
+      if (u.pathname === '/api/phile/latest') {
+        return Response.json(data.phileLatest);
+      }
+      if (u.pathname === '/api/portpholio') {
+        return Response.json(data.portpholio);
+      }
+    }
+    return _origFetch.apply(this, arguments);
+  };
+
+  // Show build timestamp in console
+  _dataPromise.then(d => {
+    console.log('📦 Static MD Browser — built ' + d.buildTime);
+  });
+})();
+</script>
+
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Philo MD Browser</title>
+<script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+<style>
+  /* ─── Light Mode (default) ─── */
+  :root {
+    --bg: #FBF4F8;
+    --sidebar-bg: #4D2A58;
+    --sidebar-text: rgba(255,255,255,0.78);
+    --sidebar-hover: rgba(255,255,255,0.1);
+    --sidebar-active: rgba(230,90,168,0.22);
+    --sidebar-active-text: #FCB8E0;
+    --sidebar-section: rgba(255,255,255,0.3);
+    --content-bg: #FFFAFD;
+    --border: #F0D8E8;
+    --text: #2C2028;
+    --text-sec: #907080;
+    --accent: #D8509C;
+    --accent-light: #F08CC4;
+    --accent-glow: rgba(216,80,156,0.12);
+    --link: #C86048;
+    --code-bg: #FDF0F8;
+    --code-color: #C84890;
+    --amber: #D8AA44;
+    --rose: #E09090;
+    --rose-bg: #FFF0EE;
+    --sage-tint: #FDF0F8;
+    --terracotta: #C86048;
+    --sidebar-width: 280px;
+    --plum-deep: #4D2A58;
+    --plum-mid: #D8509C;
+    --plum-light: #FCB8E0;
+    --plum-glow: rgba(216,80,156,0.15);
+  }
+
+  /* ─── Dark Mode ─── */
+  [data-theme="dark"] {
+    --bg: #1E1024;
+    --sidebar-bg: #2E1838;
+    --sidebar-hover: rgba(255,255,255,0.07);
+    --sidebar-active: rgba(230,140,200,0.2);
+    --sidebar-active-text: #FCB8E0;
+    --content-bg: #261430;
+    --border: #44283E;
+    --text: #F8ECF4;
+    --text-sec: #C0A0B8;
+    --accent: #F08CC4;
+    --accent-light: #FCB8E0;
+    --accent-glow: rgba(240,140,196,0.15);
+    --link: #F0A888;
+    --code-bg: #381E42;
+    --code-color: #FCB8E0;
+    --amber: #F0CC70;
+    --rose: #E0A8A0;
+    --rose-bg: #381828;
+    --sage-tint: #381E42;
+    --plum-deep: #2E1838;
+    --plum-glow: rgba(240,140,196,0.12);
+  }
+
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Inter', sans-serif;
+    background: var(--bg);
+    display: flex;
+    height: 100vh;
+    overflow: hidden;
+    transition: background 0.4s, color 0.4s;
+  }
+
+  /* ─── Sidebar ─── */
+  #sidebar {
+    width: var(--sidebar-width);
+    min-width: var(--sidebar-width);
+    background: var(--sidebar-bg);
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+    border-right: 1px solid rgba(255,255,255,0.06);
+    transition: background 0.4s;
+  }
+  #sidebar-header {
+    padding: 18px 20px 10px;
+    border-bottom: 1px solid rgba(255,255,255,0.06);
+    flex-shrink: 0;
+  }
+  #sidebar-header .brand {
+    font-size: 13px; font-weight: 700; letter-spacing: 0.05em;
+    color: var(--plum-light);
+  }
+  #sidebar-header .subtitle {
+    font-size: 10px; font-weight: 400;
+    color: rgba(255,255,255,0.35); letter-spacing: 0.02em;
+    margin-top: 4px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  }
+
+  /* Source Tabs */
+  #source-tabs {
+    display: flex; gap: 0; padding: 8px 12px;
+    border-bottom: 1px solid rgba(255,255,255,0.06);
+    flex-shrink: 0;
+  }
+  .source-tab {
+    flex: 1; padding: 7px 8px; background: transparent;
+    border: 1px solid rgba(255,255,255,0.1);
+    color: rgba(255,255,255,0.45); font-size: 11px; font-weight: 600;
+    letter-spacing: 0.03em; cursor: pointer; transition: all 0.2s; text-align: center;
+  }
+  .source-tab:first-child { border-radius: 7px 0 0 7px; }
+  .source-tab:last-child { border-radius: 0 7px 7px 0; }
+  .source-tab:not(:last-child) { border-right: none; }
+  .source-tab:hover { color: rgba(255,255,255,0.8); background: rgba(255,255,255,0.05); }
+  .source-tab.active {
+    background: var(--sidebar-active); color: var(--sidebar-active-text);
+    border-color: rgba(216,80,156,0.3);
+  }
+  .source-tab.home-tab { flex: 0; padding: 7px 12px; font-size: 14px; }
+
+  #sidebar-search {
+    margin: 10px 12px; padding: 8px 12px;
+    background: rgba(255,255,255,0.07); border: 1px solid rgba(255,255,255,0.1);
+    border-radius: 8px; color: #fff; font-size: 13px; outline: none;
+    flex-shrink: 0; transition: border-color 0.2s;
+  }
+  #sidebar-search:focus { border-color: var(--plum-light); }
+  #sidebar-search::placeholder { color: rgba(255,255,255,0.3); }
+  #sidebar-list { overflow-y: auto; flex: 1; padding-bottom: 16px; }
+  #doc-count {
+    padding: 8px 20px; font-size: 10px; color: rgba(255,255,255,0.25);
+    border-top: 1px solid rgba(255,255,255,0.06); flex-shrink: 0;
+  }
+
+  /* ─── Theme Toggle ─── */
+  #theme-toggle {
+    padding: 6px 12px; margin: 0 12px 10px;
+    background: rgba(255,255,255,0.05); border: 1px solid rgba(255,255,255,0.08);
+    border-radius: 8px; color: rgba(255,255,255,0.4); font-size: 11px;
+    cursor: pointer; transition: all 0.2s; text-align: center; flex-shrink: 0;
+  }
+  #theme-toggle:hover { color: rgba(255,255,255,0.7); background: rgba(255,255,255,0.08); }
+
+  /* ─── Tree ─── */
+  .tree-folder {
+    cursor: pointer; display: flex; align-items: center; gap: 6px;
+    padding: 7px 16px; font-size: 11px; font-weight: 700;
+    color: rgba(255,255,255,0.45); text-transform: uppercase;
+    letter-spacing: 0.1em; user-select: none; transition: .15s;
+  }
+  .tree-folder:hover { color: rgba(255,255,255,0.7); }
+  .tree-folder .arrow {
+    font-size: 8px; transition: transform .15s; display: inline-block; width: 10px;
+  }
+  .tree-folder.collapsed .arrow { transform: rotate(-90deg); }
+  .tree-folder.collapsed + .tree-children { display: none; }
+  .tree-children .tree-folder { padding-left: 28px; font-size: 10px; }
+  .tree-children .tree-children .sidebar-item { padding-left: 40px; }
+  .tree-children .sidebar-item { padding-left: 28px; }
+
+  .sidebar-item {
+    padding: 6px 20px; font-size: 13px; color: var(--sidebar-text);
+    cursor: pointer; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+    transition: background 0.15s, color 0.15s;
+  }
+  .sidebar-item:hover { background: var(--sidebar-hover); color: #fff; }
+  .sidebar-item.active {
+    background: var(--sidebar-active); color: var(--sidebar-active-text); font-weight: 600;
+  }
+  .file-icon { opacity: 0.4; font-size: 10px; margin-right: 3px; }
+
+  /* ─── Main ─── */
+  #main { flex: 1; display: flex; flex-direction: column; overflow: hidden; }
+
+  /* Toolbar */
+  #toolbar {
+    display: none; align-items: center; gap: 12px; padding: 10px 28px;
+    background: var(--content-bg); border-bottom: 1px solid var(--border);
+    flex-shrink: 0; transition: background 0.4s, border-color 0.4s;
+  }
+  #doc-title { font-size: 15px; font-weight: 600; color: var(--text); flex: 1; }
+  #doc-path { font-size: 11px; color: var(--text-sec); font-family: 'SF Mono', 'Fira Code', monospace; }
+  .toolbar-btn {
+    padding: 5px 12px; background: none; border: 1px solid var(--border);
+    border-radius: 6px; font-size: 12px; color: var(--text-sec);
+    cursor: pointer; transition: all 0.15s;
+  }
+  .toolbar-btn:hover { border-color: var(--accent); color: var(--accent); }
+  .zoom-btn {
+    width: 28px; height: 28px; border-radius: 6px;
+    border: 1px solid var(--border); background: none;
+    color: var(--text-sec); font-size: 14px; font-weight: 700;
+    cursor: pointer; display: flex; align-items: center; justify-content: center;
+    transition: .15s;
+  }
+  .zoom-btn:hover { border-color: var(--accent); color: var(--accent); }
+  #zoom-label { font-size: 11px; color: var(--text-sec); min-width: 36px; text-align: center; }
+
+  /* Content */
+  #content-wrap {
+    flex: 1; overflow-y: auto; padding: 44px 52px;
+    background: var(--content-bg); transition: background 0.4s;
+  }
+  #md-body { max-width: 760px; margin: 0 auto; display: none; }
+
+  /* ─── Markdown Styles ─── */
+  #md-body h1 {
+    font-size: 28px; font-weight: 700; color: var(--text);
+    margin: 0 0 24px; padding-bottom: 12px;
+    border-bottom: 2px solid var(--amber); line-height: 1.25;
+  }
+  #md-body h2 {
+    font-size: 20px; font-weight: 700; color: var(--text);
+    margin: 36px 0 14px; padding-bottom: 6px;
+    border-bottom: 1px solid var(--border);
+  }
+  #md-body h3 { font-size: 16px; font-weight: 700; color: var(--text); margin: 24px 0 10px; }
+  #md-body h4 {
+    font-size: 13px; font-weight: 700; color: var(--text-sec);
+    margin: 18px 0 8px; text-transform: uppercase; letter-spacing: 0.05em;
+  }
+  #md-body p { font-size: 15px; line-height: 1.8; color: var(--text); margin: 0 0 14px; }
+  #md-body a { color: var(--link); text-decoration: none; }
+  #md-body a:hover { text-decoration: underline; }
+  #md-body ul, #md-body ol { margin: 0 0 14px 24px; }
+  #md-body li { font-size: 15px; line-height: 1.75; color: var(--text); margin-bottom: 4px; }
+  #md-body blockquote {
+    border-left: 3px solid var(--rose); margin: 16px 0; padding: 12px 20px;
+    background: var(--rose-bg); color: var(--text-sec);
+    font-style: italic; border-radius: 0 8px 8px 0;
+  }
+  #md-body blockquote p { margin: 0; color: var(--text-sec); }
+  #md-body code {
+    background: var(--code-bg); padding: 2px 7px; border-radius: 4px;
+    font-family: 'SF Mono', 'Fira Code', monospace; font-size: 13px; color: var(--code-color);
+  }
+  #md-body pre {
+    background: var(--plum-deep); border-radius: 10px;
+    padding: 20px 22px; margin: 0 0 18px; overflow-x: auto;
+  }
+  #md-body pre code { background: none; color: #cdd6f4; font-size: 13px; padding: 0; }
+  #md-body table {
+    width: 100%; border-collapse: collapse; margin: 0 0 18px; font-size: 14px;
+  }
+  #md-body th {
+    background: var(--sage-tint); padding: 9px 14px; text-align: left;
+    font-weight: 700; border: 1px solid var(--border);
+  }
+  #md-body td { padding: 8px 14px; border: 1px solid var(--border); vertical-align: top; }
+  #md-body tr:nth-child(even) td { background: var(--sage-tint); }
+  #md-body hr { border: none; border-top: 1px solid var(--border); margin: 28px 0; }
+  #md-body strong { font-weight: 700; }
+  #md-body em { font-style: italic; color: var(--text-sec); }
+  #md-body img { max-width: 100%; border-radius: 8px; margin: 12px 0; }
+
+  /* ─── Dashboard ─── */
+  #dashboard { display: none; max-width: 900px; margin: 0 auto; }
+  #dashboard.visible { display: block; }
+
+  .dash-greeting { margin-bottom: 32px; }
+  .dash-greeting h1 { font-size: 30px; font-weight: 700; color: var(--text); margin-bottom: 6px; }
+  .dash-greeting .dash-date { font-size: 14px; color: var(--text-sec); font-weight: 400; }
+  .dash-greeting .dash-accent-line {
+    width: 60px; height: 3px;
+    background: linear-gradient(90deg, var(--accent), var(--amber));
+    border-radius: 2px; margin-top: 12px;
+  }
+  .dash-theme-indicator {
+    display: inline-block; margin-left: 12px; font-size: 12px;
+    color: var(--text-sec); opacity: 0.6;
+  }
+
+  .dash-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+    gap: 20px;
+  }
+  .dash-card {
+    background: var(--content-bg); border: 1px solid var(--border);
+    border-radius: 14px; padding: 22px 24px;
+    box-shadow: 0 2px 12px rgba(0,0,0,0.04);
+    transition: box-shadow 0.2s, background 0.4s, border-color 0.4s;
+  }
+  .dash-card:hover { box-shadow: 0 4px 20px rgba(0,0,0,0.07); }
+  .dash-card h3 {
+    font-size: 12px; font-weight: 700; text-transform: uppercase;
+    letter-spacing: 0.08em; color: var(--text-sec); margin-bottom: 16px;
+    display: flex; align-items: center; gap: 8px;
+  }
+  .dash-card h3 .card-icon { font-size: 15px; }
+
+  /* Stats card */
+  .stat-row {
+    display: flex; justify-content: space-between; align-items: center;
+    padding: 10px 0; border-bottom: 1px solid rgba(0,0,0,0.04);
+    cursor: pointer; transition: .15s;
+  }
+  .stat-row:last-child { border-bottom: none; }
+  .stat-row:hover { padding-left: 6px; }
+  .stat-source { font-size: 14px; font-weight: 600; color: var(--text); }
+  .stat-count {
+    font-size: 13px; color: var(--accent); background: var(--accent-glow);
+    padding: 3px 10px; border-radius: 12px; font-weight: 500;
+  }
+
+  /* Recent + modified cards */
+  .recent-item, .modified-item {
+    display: flex; align-items: center; gap: 10px;
+    padding: 7px 0; border-bottom: 1px solid rgba(0,0,0,0.04);
+    cursor: pointer; transition: .15s; font-size: 13px; color: var(--text);
+  }
+  .recent-item:last-child, .modified-item:last-child { border-bottom: none; }
+  .recent-item:hover, .modified-item:hover { color: var(--accent); padding-left: 4px; }
+  .recent-source {
+    font-size: 9px; font-weight: 700; text-transform: uppercase;
+    letter-spacing: 0.05em; padding: 2px 6px; border-radius: 4px; flex-shrink: 0;
+  }
+  .recent-source.src-philo { background: var(--accent-glow); color: var(--accent); }
+  .recent-source.src-wlw { background: rgba(192,96,64,0.1); color: var(--terracotta); }
+  .recent-source.src-default { background: rgba(0,0,0,0.05); color: var(--text-sec); }
+  .recent-time, .modified-time { font-size: 11px; color: var(--text-sec); margin-left: auto; flex-shrink: 0; }
+  .modified-name { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .recent-empty { font-size: 13px; color: var(--text-sec); font-style: italic; padding: 8px 0; }
+
+  /* ─── Calendar Card ─── */
+  .cal-event {
+    display: flex; align-items: flex-start; gap: 10px;
+    padding: 8px 0; border-bottom: 1px solid rgba(0,0,0,0.04);
+    font-size: 13px; color: var(--text);
+  }
+  .cal-event:last-child { border-bottom: none; }
+  .cal-date {
+    font-size: 10px; font-weight: 700; text-align: center;
+    background: var(--accent-glow); color: var(--accent);
+    padding: 4px 8px; border-radius: 6px; flex-shrink: 0;
+    min-width: 42px; line-height: 1.3;
+  }
+  .cal-date .cal-month { font-size: 8px; text-transform: uppercase; letter-spacing: 0.05em; opacity: 0.8; }
+  .cal-date .cal-day { font-size: 16px; font-weight: 800; }
+  .cal-title { font-size: 13px; color: var(--text); line-height: 1.4; }
+  .cal-type {
+    font-size: 9px; font-weight: 600; text-transform: uppercase;
+    letter-spacing: 0.05em; color: var(--text-sec); margin-top: 2px;
+  }
+  .cal-badge {
+    display: inline-block; font-size: 9px; padding: 1px 5px;
+    border-radius: 3px; font-weight: 600; margin-left: 6px;
+  }
+  .cal-badge.apple { background: rgba(192,96,64,0.1); color: var(--terracotta); }
+  .cal-badge.synced { background: var(--accent-glow); color: var(--accent); }
+
+  /* ─── Todo card ─── */
+  .todo-item {
+    display: flex; align-items: flex-start; gap: 10px;
+    padding: 8px 0; border-bottom: 1px solid rgba(0,0,0,0.04);
+    font-size: 14px; color: var(--text);
+  }
+  .todo-item:last-child { border-bottom: none; }
+  .todo-item.done { opacity: 0.45; }
+  .todo-item.done .todo-text { text-decoration: line-through; }
+  .todo-check {
+    width: 18px; height: 18px; border-radius: 50%;
+    border: 2px solid var(--border); background: none;
+    cursor: pointer; flex-shrink: 0; margin-top: 1px;
+    display: flex; align-items: center; justify-content: center;
+    transition: all 0.2s; font-size: 10px; color: transparent;
+  }
+  .todo-check:hover { border-color: var(--accent); }
+  .todo-item.done .todo-check {
+    border-color: var(--accent); background: var(--accent); color: #fff;
+  }
+  .todo-text { flex: 1; line-height: 1.4; }
+  .todo-delete {
+    background: none; border: none; color: var(--border);
+    cursor: pointer; font-size: 14px; padding: 0 4px;
+    transition: color 0.15s; flex-shrink: 0;
+  }
+  .todo-delete:hover { color: var(--terracotta); }
+  #todo-input {
+    width: 100%; padding: 10px 0; background: none;
+    border: none; border-bottom: 1px solid var(--border);
+    font-size: 14px; font-family: inherit; color: var(--text);
+    outline: none; margin-top: 4px; transition: border-color 0.2s;
+  }
+  #todo-input:focus { border-color: var(--accent); }
+  #todo-input::placeholder { color: var(--text-sec); opacity: 0.5; }
+
+  /* ─── Your Day Panel ─── */
+  .your-day {
+    grid-column: 1 / -1;
+    background: linear-gradient(135deg, var(--content-bg), var(--sage-tint));
+    border: 1px solid var(--border); border-radius: 14px;
+    padding: 24px 28px; box-shadow: 0 2px 12px rgba(0,0,0,0.04);
+    transition: background 0.4s, border-color 0.4s;
+  }
+  .your-day h3 {
+    font-size: 12px; font-weight: 700; text-transform: uppercase;
+    letter-spacing: 0.08em; color: var(--text-sec); margin-bottom: 16px;
+    display: flex; align-items: center; gap: 8px;
+  }
+  .your-day h3 .card-icon { font-size: 15px; }
+  .day-columns { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 20px; }
+  .day-section h4 {
+    font-size: 11px; font-weight: 700; text-transform: uppercase;
+    letter-spacing: 0.06em; color: var(--accent); margin-bottom: 10px;
+    display: flex; align-items: center; gap: 6px;
+  }
+  .day-item {
+    font-size: 13px; color: var(--text); padding: 4px 0; line-height: 1.5;
+    display: flex; align-items: flex-start; gap: 6px;
+  }
+  .day-item .day-bullet { color: var(--accent); flex-shrink: 0; font-size: 11px; margin-top: 2px; }
+  .day-item-empty { font-size: 12px; color: var(--text-sec); font-style: italic; }
+
+  /* ─── Phile Briefing Cards ─── */
+  .phile-card {
+    grid-column: 1 / -1;
+    background: var(--content-bg); border: 1px solid var(--border);
+    border-radius: 14px; padding: 22px 24px;
+    box-shadow: 0 2px 12px rgba(0,0,0,0.04);
+    transition: all 0.2s;
+    cursor: default;
+  }
+  .phile-card:hover { box-shadow: 0 4px 20px rgba(0,0,0,0.07); }
+  .phile-header {
+    display: flex; align-items: center; justify-content: space-between;
+    margin-bottom: 14px;
+  }
+  .phile-header h3 {
+    font-size: 12px; font-weight: 700; text-transform: uppercase;
+    letter-spacing: 0.08em; color: var(--text-sec);
+    display: flex; align-items: center; gap: 8px; margin: 0;
+  }
+  .phile-header .card-icon { font-size: 15px; }
+  .phile-actions { display: flex; gap: 8px; align-items: center; }
+  .phile-btn {
+    padding: 5px 12px; background: none; border: 1px solid var(--border);
+    border-radius: 6px; font-size: 11px; color: var(--text-sec);
+    cursor: pointer; transition: all 0.15s; display: flex; align-items: center; gap: 5px;
+  }
+  .phile-btn:hover { border-color: var(--accent); color: var(--accent); }
+  .phile-btn.playing { border-color: var(--accent); color: var(--accent); background: var(--accent-glow); }
+  .phile-summary { font-size: 14px; color: var(--text); line-height: 1.7; }
+  .phile-summary ul { margin: 8px 0 8px 18px; }
+  .phile-summary li { margin-bottom: 4px; }
+  .phile-link {
+    display: inline-block; margin-top: 12px; font-size: 13px;
+    color: var(--accent); cursor: pointer; font-weight: 600;
+    transition: opacity 0.15s;
+  }
+  .phile-link:hover { opacity: 0.7; }
+  .phile-generating {
+    font-size: 13px; color: var(--text-sec); font-style: italic;
+    display: flex; align-items: center; gap: 8px;
+  }
+  .phile-generating .spinner {
+    width: 14px; height: 14px; border: 2px solid var(--border);
+    border-top-color: var(--accent); border-radius: 50%;
+    animation: spin 0.8s linear infinite;
+  }
+  @keyframes spin { to { transform: rotate(360deg); } }
+
+  /* ─── PortPholio View ─── */
+  #portpholio { display: none; max-width: 900px; margin: 0 auto; }
+  #portpholio.visible { display: block; }
+
+  .pp-header { margin-bottom: 32px; }
+  .pp-header h1 {
+    font-size: 28px; font-weight: 700; color: var(--text); margin-bottom: 2px;
+    display: flex; align-items: center; gap: 12px;
+  }
+  .pp-header h1 .pp-logo {
+    font-size: 26px; background: linear-gradient(135deg, var(--accent), var(--amber));
+    -webkit-background-clip: text; -webkit-text-fill-color: transparent;
+  }
+  .pp-header .pp-subtitle {
+    font-size: 14px; color: var(--text-sec); font-weight: 400; margin-top: 4px;
+  }
+  .pp-header .pp-accent-line {
+    width: 80px; height: 3px;
+    background: linear-gradient(90deg, var(--accent), var(--amber));
+    border-radius: 2px; margin-top: 14px;
+  }
+  .pp-stats {
+    display: flex; gap: 24px; margin-top: 16px;
+  }
+  .pp-stat {
+    font-size: 12px; color: var(--text-sec); display: flex; align-items: center; gap: 6px;
+  }
+  .pp-stat-num {
+    font-size: 20px; font-weight: 800; color: var(--accent);
+  }
+
+  .pp-section { margin-bottom: 32px; }
+  .pp-section-title {
+    font-size: 11px; font-weight: 700; text-transform: uppercase;
+    letter-spacing: 0.1em; color: var(--text-sec); margin-bottom: 14px;
+    display: flex; align-items: center; gap: 8px;
+    padding-bottom: 8px; border-bottom: 1px solid var(--border);
+  }
+  .pp-section-title .pp-section-icon { font-size: 15px; }
+  .pp-section-count {
+    font-size: 10px; color: var(--accent); background: var(--accent-glow);
+    padding: 2px 8px; border-radius: 10px; font-weight: 600; margin-left: auto;
+  }
+
+  .pp-card {
+    background: var(--content-bg); border: 1px solid var(--border);
+    border-radius: 14px; padding: 20px 24px; margin-bottom: 14px;
+    box-shadow: 0 2px 8px rgba(0,0,0,0.03);
+    transition: box-shadow 0.2s, border-color 0.2s, background 0.4s;
+    display: flex; gap: 18px; align-items: flex-start;
+  }
+  .pp-card:hover { box-shadow: 0 4px 20px rgba(0,0,0,0.07); border-color: var(--accent); }
+
+  .pp-card-icon {
+    width: 44px; height: 44px; border-radius: 10px;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 22px; flex-shrink: 0;
+    background: var(--accent-glow);
+  }
+  .pp-card-icon.type-research { background: rgba(104,160,216,0.12); }
+  .pp-card-icon.type-whitepaper { background: var(--accent-glow); }
+  .pp-card-icon.type-proposal { background: rgba(216,170,68,0.12); }
+  .pp-card-icon.type-report { background: rgba(104,180,140,0.12); }
+  .pp-card-icon.type-other { background: rgba(144,112,128,0.12); }
+
+  .pp-card-body { flex: 1; min-width: 0; }
+  .pp-card-title {
+    font-size: 15px; font-weight: 700; color: var(--text); margin-bottom: 4px;
+    line-height: 1.3;
+  }
+  .pp-card-meta {
+    font-size: 11px; color: var(--text-sec); margin-bottom: 8px;
+    display: flex; align-items: center; gap: 12px; flex-wrap: wrap;
+  }
+  .pp-card-meta .pp-tag {
+    font-size: 9px; font-weight: 700; text-transform: uppercase;
+    letter-spacing: 0.05em; padding: 2px 8px; border-radius: 4px;
+  }
+  .pp-tag.tag-research { background: rgba(104,160,216,0.12); color: #4888B8; }
+  .pp-tag.tag-whitepaper { background: var(--accent-glow); color: var(--accent); }
+  .pp-tag.tag-proposal { background: rgba(216,170,68,0.12); color: #B8881C; }
+  .pp-tag.tag-report { background: rgba(104,180,140,0.12); color: #408860; }
+  .pp-tag.tag-other { background: rgba(144,112,128,0.12); color: var(--text-sec); }
+
+  [data-theme="dark"] .pp-tag.tag-research { color: #88B8E0; }
+  [data-theme="dark"] .pp-tag.tag-whitepaper { color: var(--accent-light); }
+  [data-theme="dark"] .pp-tag.tag-proposal { color: #E0C060; }
+  [data-theme="dark"] .pp-tag.tag-report { color: #70C8A0; }
+
+  .pp-card-summary {
+    font-size: 13px; color: var(--text-sec); line-height: 1.6;
+    display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden;
+  }
+  .pp-card-actions {
+    display: flex; gap: 8px; margin-top: 12px;
+  }
+  .pp-btn {
+    padding: 5px 14px; border-radius: 6px; font-size: 11px; font-weight: 600;
+    cursor: pointer; transition: all 0.15s; border: 1px solid var(--border);
+    background: none; color: var(--text-sec);
+    display: flex; align-items: center; gap: 5px;
+  }
+  .pp-btn:hover { border-color: var(--accent); color: var(--accent); }
+  .pp-btn.pp-btn-primary {
+    background: var(--accent); color: #fff; border-color: var(--accent);
+  }
+  .pp-btn.pp-btn-primary:hover { opacity: 0.85; }
+
+  .pp-empty {
+    text-align: center; padding: 60px 20px; color: var(--text-sec);
+  }
+  .pp-empty .pp-empty-icon { font-size: 48px; margin-bottom: 12px; }
+  .pp-empty .pp-empty-title { font-size: 16px; font-weight: 600; margin-bottom: 6px; }
+  .pp-empty .pp-empty-msg { font-size: 13px; opacity: 0.7; }
+
+  /* Empty state */
+  #empty {
+    display: flex; flex-direction: column; align-items: center;
+    justify-content: center; height: 100%; color: var(--text-sec); gap: 12px;
+  }
+  #empty .icon { font-size: 52px; }
+  #empty .title { font-size: 18px; font-weight: 600; color: var(--text-sec); }
+  #empty .msg { font-size: 14px; color: var(--text-sec); opacity: 0.7; }
+
+  /* Mobile */
+  @media (max-width: 768px) {
+    #sidebar { width: 100%; min-width: 100%; position: absolute; z-index: 10; transform: translateX(0); transition: transform 0.3s; }
+    #sidebar.hidden { transform: translateX(-100%); }
+    #content-wrap { padding: 24px 20px; }
+    .dash-grid { grid-template-columns: 1fr; }
+    .mobile-toggle {
+      display: block !important;
+      position: fixed; top: 10px; left: 10px; z-index: 20;
+      width: 36px; height: 36px; border-radius: 8px;
+      background: var(--sidebar-bg); border: none; color: #fff;
+      font-size: 18px; cursor: pointer;
+    }
+  }
+  .mobile-toggle { display: none; }
+</style>
+</head>
+<body>
+
+<button class="mobile-toggle" onclick="toggleSidebar()">&#9776;</button>
+
+<div id="sidebar">
+  <div id="sidebar-header">
+    <div class="brand">Philo MD Browser</div>
+    <div class="subtitle" id="browse-path">Loading...</div>
+  </div>
+  <div id="source-tabs"></div>
+  <input id="sidebar-search" placeholder="Search docs... (&#8984;K)" oninput="filterList(this.value)">
+  <div id="sidebar-list">
+    <p style="padding:20px;font-size:13px;color:rgba(255,255,255,0.3)">Loading...</p>
+  </div>
+  <button id="theme-toggle" onclick="cycleTheme()">&#9790; Auto</button>
+  <div id="doc-count"></div>
+</div>
+
+<div id="main">
+  <div id="toolbar">
+    <span id="doc-title">Untitled</span>
+    <button class="zoom-btn" onclick="mdZoom(-.1)" title="Zoom out">&minus;</button>
+    <span id="zoom-label">100%</span>
+    <button class="zoom-btn" onclick="mdZoom(.1)" title="Zoom in">+</button>
+    <span id="doc-path"></span>
+    <button class="toolbar-btn" onclick="copyRaw()">Copy Raw</button>
+    <button class="toolbar-btn" onclick="copyLink()">Copy Link</button>
+  </div>
+  <div id="content-wrap">
+    <div id="dashboard">
+      <div class="dash-greeting">
+        <h1 id="dash-hello">Hello, Jessica</h1>
+        <div class="dash-date" id="dash-date"></div>
+        <div class="dash-accent-line"></div>
+      </div>
+      <div class="dash-grid">
+        <!-- Your Day at a Glance -->
+        <div class="your-day">
+          <h3><span class="card-icon">&#9728;&#65039;</span> Your Day at a Glance</h3>
+          <div class="day-columns" id="your-day-content">
+            <div class="day-section">
+              <h4>&#128197; Today</h4>
+              <div id="day-calendar"></div>
+            </div>
+            <div class="day-section">
+              <h4>&#128260; Overnight</h4>
+              <div id="day-sync"></div>
+            </div>
+            <div class="day-section">
+              <h4>&#128204; Where We Left Off</h4>
+              <div id="day-memory"></div>
+            </div>
+            <div class="day-section">
+              <h4>&#9888;&#65039; Blocked</h4>
+              <div id="day-blocked"></div>
+            </div>
+          </div>
+        </div>
+
+        <!-- First Light / Golden Hour Phile -->
+        <div class="phile-card" id="phile-card">
+          <div class="phile-header">
+            <h3><span class="card-icon" id="phile-icon">&#9728;&#65039;</span> <span id="phile-title">First Light</span></h3>
+            <div class="phile-actions">
+              <button class="phile-btn" onclick="readPhileAloud()" id="phile-audio-btn" title="Read aloud">
+                &#128264; Listen
+              </button>
+              <button class="phile-btn" onclick="openLatestPhile()" id="phile-open-btn" title="Open full document">
+                Read Full Phile &#8594;
+              </button>
+            </div>
+          </div>
+          <div class="phile-summary" id="phile-summary">
+            <div class="phile-generating"><div class="spinner"></div> Checking for today's briefing...</div>
+          </div>
+        </div>
+
+        <!-- Stats + Calendar row -->
+        <div class="dash-card">
+          <h3><span class="card-icon">&#128218;</span> Your Docs</h3>
+          <div id="dash-stats"></div>
+        </div>
+        <div class="dash-card">
+          <h3><span class="card-icon">&#128197;</span> Upcoming</h3>
+          <div id="dash-calendar"></div>
+        </div>
+
+        <!-- To-Do full width -->
+        <div class="dash-card" style="grid-column: 1 / -1;">
+          <h3><span class="card-icon">&#128221;</span> To-Do</h3>
+          <div id="todo-list"></div>
+          <input id="todo-input" placeholder="Add a task and press Enter..." onkeydown="todoKeydown(event)">
+        </div>
+
+        <!-- Recent row -->
+        <div class="dash-card">
+          <h3><span class="card-icon">&#128337;</span> Recently Viewed</h3>
+          <div id="dash-recent"></div>
+        </div>
+        <div class="dash-card">
+          <h3><span class="card-icon">&#9889;</span> Recently Modified</h3>
+          <div id="dash-modified"></div>
+        </div>
+      </div>
+    </div>
+
+    <div id="portpholio">
+      <div class="pp-header">
+        <h1><span class="pp-logo">&#128218;</span> PortPholio</h1>
+        <div class="pp-subtitle">Finished deliverables &mdash; research, white papers, proposals, reports</div>
+        <div class="pp-accent-line"></div>
+        <div class="pp-stats" id="pp-stats"></div>
+      </div>
+      <div id="pp-content"></div>
+    </div>
+
+    <div id="empty">
+      <div class="icon">&#128196;</div>
+      <div class="title">Select a document</div>
+      <div class="msg">Pick a markdown file from the sidebar to start reading</div>
+    </div>
+
+    <div id="md-body"></div>
+  </div>
+</div>
+
+<script>
+let allDocs = [];
+let currentContent = '';
+let currentSource = null;
+let sourcesInfo = [];
+
+const SOURCE_COLORS = { Philes: 'src-philo', 'WLW Docs': 'src-wlw', Philo: 'src-philo', WLW: 'src-wlw' };
+
+const FOLDER_ICONS = {
+  docs:'&#128193;', memory:'&#129504;', data:'&#128202;', inbox:'&#128236;', tools:'&#128295;',
+  app:'&#128187;', scripts:'&#128220;', deploy:'&#128640;', web:'&#127760;', tests:'&#129514;',
+  wrx:'&#9889;', config:'&#9881;', assets:'&#128248;', images:'&#128444;', notes:'&#128221;',
+  learning:'&#127891;', research:'&#128270;', archive:'&#128230;',
+};
+function getFolderIcon(n) { const l=n.toLowerCase(); if(FOLDER_ICONS[l])return FOLDER_ICONS[l]; if(/^wrx-\d+$/i.test(n))return'&#9889;'; return'&#128193;'; }
+function getFolderLabel(n) { if(/^wrx-(\d+)$/i.test(n))return n.toUpperCase(); return n.charAt(0).toUpperCase()+n.slice(1).replace(/-/g,' '); }
+
+/* ─── Sunrise/Sunset Calculation ─── */
+// Harvard, MA area (~42.5°N, ~71.6°W)
+const LAT = 42.5, LON = -71.6;
+
+function getSunTimes(date) {
+  const rad = Math.PI / 180;
+  const dayOfYear = Math.floor((date - new Date(date.getFullYear(),0,0)) / 86400000);
+  const zenith = 90.833;
+
+  function calc(rising) {
+    const lngHour = LON / 15;
+    const t = dayOfYear + ((rising ? 6 : 18) - lngHour) / 24;
+    const M = 0.9856 * t - 3.289;
+    let L = M + 1.916 * Math.sin(M * rad) + 0.020 * Math.sin(2 * M * rad) + 282.634;
+    L = ((L % 360) + 360) % 360;
+    let RA = Math.atan(0.91764 * Math.tan(L * rad)) / rad;
+    RA = ((RA % 360) + 360) % 360;
+    const Lq = Math.floor(L / 90) * 90;
+    const RAq = Math.floor(RA / 90) * 90;
+    RA = (RA + (Lq - RAq)) / 15;
+    const sinDec = 0.39782 * Math.sin(L * rad);
+    const cosDec = Math.cos(Math.asin(sinDec));
+    const cosH = (Math.cos(zenith * rad) - sinDec * Math.sin(LAT * rad)) / (cosDec * Math.cos(LAT * rad));
+    if (cosH > 1 || cosH < -1) return null;
+    let H = rising ? (360 - Math.acos(cosH) / rad) : (Math.acos(cosH) / rad);
+    H /= 15;
+    const T = H + RA - 0.06571 * t - 6.622;
+    let UT = ((T - lngHour) % 24 + 24) % 24;
+    // Convert to local time (EDT = UTC-4, EST = UTC-5)
+    const jan = new Date(date.getFullYear(), 0, 1);
+    const jul = new Date(date.getFullYear(), 6, 1);
+    const isDST = date.getTimezoneOffset() < Math.max(jan.getTimezoneOffset(), jul.getTimezoneOffset());
+    const offset = isDST ? -4 : -5;
+    let local = UT + offset;
+    local = ((local % 24) + 24) % 24;
+    return local;
+  }
+
+  return { sunrise: calc(true), sunset: calc(false) };
+}
+
+function isDarkTime() {
+  const now = new Date();
+  const h = now.getHours() + now.getMinutes() / 60;
+  const sun = getSunTimes(now);
+  if (!sun.sunrise || !sun.sunset) return h < 6 || h > 20;
+  return h < sun.sunrise || h > sun.sunset;
+}
+
+/* ─── Theme Management ─── */
+// Modes: 'auto', 'light', 'dark'
+let themeMode = localStorage.getItem('philo-theme') || 'auto';
+let sunCheckInterval;
+
+function applyTheme() {
+  let dark;
+  if (themeMode === 'auto') dark = isDarkTime();
+  else dark = themeMode === 'dark';
+
+  document.documentElement.setAttribute('data-theme', dark ? 'dark' : 'light');
+  updateThemeButton();
+}
+
+function updateThemeButton() {
+  const btn = document.getElementById('theme-toggle');
+  if (themeMode === 'auto') {
+    const dark = isDarkTime();
+    btn.innerHTML = dark ? '&#9790; Auto (Night)' : '&#9788; Auto (Day)';
+  } else if (themeMode === 'dark') {
+    btn.innerHTML = '&#9790; Dark';
+  } else {
+    btn.innerHTML = '&#9788; Light';
+  }
+}
+
+function cycleTheme() {
+  if (themeMode === 'auto') themeMode = 'light';
+  else if (themeMode === 'light') themeMode = 'dark';
+  else themeMode = 'auto';
+  localStorage.setItem('philo-theme', themeMode);
+  applyTheme();
+}
+
+// Check every 5 minutes if auto-mode needs to switch
+function startSunCheck() {
+  applyTheme();
+  sunCheckInterval = setInterval(applyTheme, 300000);
+}
+
+/* ─── Tree rendering ─── */
+function buildTree(docs) {
+  const root = { _files: [] };
+  for (const doc of docs) {
+    const parts = doc.path.split('/');
+    let node = root;
+    for (let i = 0; i < parts.length - 1; i++) {
+      if (!node[parts[i]]) node[parts[i]] = { _files: [] };
+      node = node[parts[i]];
+    }
+    node._files.push(doc);
+  }
+  return root;
+}
+
+function renderNode(node, depth) {
+  let html = '';
+  const folders = Object.keys(node).filter(k => k !== '_files').sort((a, b) => {
+    const aW = a.match(/^wrx-(\d+)$/i), bW = b.match(/^wrx-(\d+)$/i);
+    if (aW && bW) return parseInt(aW[1]) - parseInt(bW[1]);
+    if (aW) return 1; if (bW) return -1;
+    return a.localeCompare(b);
+  });
+
+  for (const doc of (node._files || [])) {
+    const pad = depth > 0 ? ` style="padding-left:${16 + depth * 14}px"` : '';
+    html += `<div class="sidebar-item" data-path="${doc.path}" data-doc='${JSON.stringify(doc).replace(/'/g, "&#39;")}'${pad}><span class="file-icon">&#128196;</span>${doc.name}</div>`;
+  }
+  for (const folder of folders) {
+    const icon = getFolderIcon(folder), label = getFolderLabel(folder);
+    const collapsed = depth >= 1 ? ' collapsed' : '';
+    const pad = depth > 0 ? ` style="padding-left:${8 + depth * 14}px"` : '';
+    html += `<div class="tree-folder${collapsed}" onclick="this.classList.toggle('collapsed')"${pad}><span class="arrow">&#9660;</span>${icon} ${label}</div>`;
+    html += '<div class="tree-children">' + renderNode(node[folder], depth + 1) + '</div>';
+  }
+  return html;
+}
+
+function attachSidebarClicks() {
+  document.querySelectorAll('.sidebar-item[data-doc]').forEach(item => {
+    item.onclick = () => openDoc(JSON.parse(item.dataset.doc));
+  });
+}
+
+function renderTree(docs) {
+  const el = document.getElementById('sidebar-list');
+  const html = renderNode(buildTree(docs), 0);
+  el.innerHTML = html || '<p style="padding:20px;font-size:13px;color:rgba(255,255,255,0.3)">No markdown files found</p>';
+  document.getElementById('doc-count').textContent = `${docs.length} documents`;
+  attachSidebarClicks();
+}
+
+function filterList(q) {
+  if (!q) { renderTree(allDocs); return; }
+  const ql = q.toLowerCase();
+  const filtered = allDocs.filter(d => d.name.toLowerCase().includes(ql) || d.path.toLowerCase().includes(ql));
+  const el = document.getElementById('sidebar-list');
+  let html = '';
+  for (const doc of filtered) {
+    const folder = doc.path.includes('/') ? `<span style="opacity:.4;font-size:10px;margin-left:6px">${doc.path.substring(0, doc.path.lastIndexOf('/'))}</span>` : '';
+    html += `<div class="sidebar-item" data-path="${doc.path}" data-doc='${JSON.stringify(doc).replace(/'/g, "&#39;")}'><span class="file-icon">&#128196;</span>${doc.name}${folder}</div>`;
+  }
+  el.innerHTML = html || '<p style="padding:20px;font-size:13px;color:rgba(255,255,255,0.3)">No matches</p>';
+  document.getElementById('doc-count').textContent = `${filtered.length} of ${allDocs.length}`;
+  attachSidebarClicks();
+}
+
+/* ─── Source switching ─── */
+function buildSourceTabs() {
+  const el = document.getElementById('source-tabs');
+  let html = `<button class="source-tab home-tab active" onclick="showDashboard()">&#127968;</button>`;
+  for (const src of sourcesInfo) html += `<button class="source-tab" data-source="${src.name}" onclick="switchSource('${src.name}')">${src.name}</button>`;
+  html += `<button class="source-tab" data-source="portpholio" onclick="showPortPholio()" style="color:var(--amber);border-color:rgba(216,170,68,0.25)">&#128218; PortPholio</button>`;
+  el.innerHTML = html;
+}
+
+function setActiveTab(name) {
+  document.querySelectorAll('.source-tab').forEach(t => t.classList.remove('active'));
+  if (name === null) document.querySelector('.source-tab.home-tab')?.classList.add('active');
+  else document.querySelector(`.source-tab[data-source="${name}"]`)?.classList.add('active');
+}
+
+async function switchSource(name) {
+  currentSource = name;
+  setActiveTab(name);
+  document.getElementById('browse-path').textContent = `Loading ${name}...`;
+  document.getElementById('sidebar-search').value = '';
+
+  try {
+    const res = await fetch(`/api/md-list?source=${encodeURIComponent(name)}`);
+    allDocs = await res.json();
+    renderTree(allDocs);
+    document.getElementById('browse-path').textContent = `${name} \u00B7 ${allDocs.length} docs`;
+  } catch (e) {
+    document.getElementById('sidebar-list').innerHTML = '<p style="padding:20px;font-size:13px;color:rgba(255,200,200,0.7)">Failed to load docs</p>';
+  }
+
+  document.getElementById('dashboard').classList.remove('visible');
+  document.getElementById('portpholio').classList.remove('visible');
+  document.getElementById('md-body').style.display = 'none';
+  document.getElementById('toolbar').style.display = 'none';
+  document.getElementById('empty').style.display = 'flex';
+  location.hash = `source=${encodeURIComponent(name)}`;
+
+  if (window.innerWidth <= 768) document.getElementById('sidebar').classList.remove('hidden');
+}
+
+/* ─── Dashboard ─── */
+function getGreeting() {
+  const h = new Date().getHours();
+  if (h < 12) return 'Good morning';
+  if (h < 17) return 'Good afternoon';
+  return 'Good evening';
+}
+
+function formatDate() {
+  return new Date().toLocaleDateString('en-US', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' });
+}
+
+function showDashboard() {
+  currentSource = null;
+  setActiveTab(null);
+  document.getElementById('dashboard').classList.add('visible');
+  document.getElementById('portpholio').classList.remove('visible');
+  document.getElementById('empty').style.display = 'none';
+  document.getElementById('md-body').style.display = 'none';
+  document.getElementById('toolbar').style.display = 'none';
+  document.getElementById('dash-hello').textContent = `${getGreeting()}, Jessica`;
+  document.getElementById('dash-date').textContent = formatDate();
+  document.getElementById('browse-path').textContent = 'Dashboard';
+
+  renderStats();
+  renderRecentViewed();
+  renderTodos();
+  loadRecentModified();
+  loadCalendar();
+  loadYourDay();
+  loadLatestPhile();
+
+  location.hash = '';
+  document.getElementById('sidebar-list').innerHTML =
+    '<p style="padding:20px;font-size:13px;color:rgba(255,255,255,0.3);line-height:1.6">&#127968; Home dashboard<br><span style="font-size:11px;opacity:0.6">Select a source above to browse docs</span></p>';
+  document.getElementById('doc-count').textContent = '';
+}
+
+function renderStats() {
+  const el = document.getElementById('dash-stats');
+  if (!sourcesInfo.length) { el.innerHTML = '<p style="color:var(--text-sec);font-size:13px;">Loading...</p>'; return; }
+  el.innerHTML = sourcesInfo.map(s =>
+    `<div class="stat-row" onclick="switchSource('${s.name}')">
+      <span class="stat-source">${s.name}</span>
+      <span class="stat-count">${s.docCount} docs</span>
+    </div>`
+  ).join('');
+}
+
+/* ─── Calendar ─── */
+async function loadCalendar() {
+  const el = document.getElementById('dash-calendar');
+  el.innerHTML = '<div class="recent-empty">Loading events...</div>';
+  try {
+    const res = await fetch('/api/calendar');
+    const events = await res.json();
+    if (!events.length) { el.innerHTML = '<div class="recent-empty">No upcoming events</div>'; return; }
+
+    el.innerHTML = events.slice(0, 8).map(ev => {
+      let dateHtml = '';
+      if (ev.date) {
+        const d = new Date(ev.date + 'T12:00:00');
+        const month = d.toLocaleDateString('en-US', { month: 'short' });
+        const day = d.getDate();
+        dateHtml = `<div class="cal-date"><div class="cal-month">${month}</div><div class="cal-day">${day}</div></div>`;
+      }
+      const badge = ev.source === 'apple-calendar'
+        ? '<span class="cal-badge apple">Calendar</span>'
+        : '<span class="cal-badge synced">Auto-synced</span>';
+      const title = ev.title.replace(/\*\*/g, '').replace(/^"|"$/g, '');
+      return `<div class="cal-event">${dateHtml}<div><div class="cal-title">${escHtml(title)}${badge}</div>${ev.time ? `<div class="cal-type">${ev.time}</div>` : ''}</div></div>`;
+    }).join('');
+  } catch (e) {
+    el.innerHTML = '<div class="recent-empty">Could not load calendar</div>';
+  }
+}
+
+/* ─── Your Day at a Glance ─── */
+async function loadYourDay() {
+  const calEl = document.getElementById('day-calendar');
+  const syncEl = document.getElementById('day-sync');
+  const memEl = document.getElementById('day-memory');
+  const blockedEl = document.getElementById('day-blocked');
+
+  // Set loading state
+  [calEl, syncEl, memEl, blockedEl].forEach(el => {
+    el.innerHTML = '<div class="day-item-empty">Loading...</div>';
+  });
+
+  try {
+    const res = await fetch('/api/your-day');
+    const data = await res.json();
+
+    // Calendar
+    if (data.calendar.length) {
+      calEl.innerHTML = data.calendar.map(ev => {
+        const title = ev.title.replace(/\*\*/g, '');
+        const time = ev.time ? `<span style="color:var(--text-sec);font-size:11px"> ${ev.time}</span>` : '';
+        return `<div class="day-item"><span class="day-bullet">&#9679;</span>${escHtml(title)}${time}</div>`;
+      }).join('');
+    } else {
+      calEl.innerHTML = '<div class="day-item-empty">Nothing scheduled today</div>';
+    }
+
+    // Overnight sync
+    if (data.sync.length) {
+      syncEl.innerHTML = data.sync.map(s =>
+        `<div class="day-item"><span class="day-bullet">&#9679;</span>${escHtml(s)}</div>`
+      ).join('');
+    } else {
+      syncEl.innerHTML = '<div class="day-item-empty">No overnight activity</div>';
+    }
+
+    // Where we left off
+    if (data.memory.length) {
+      memEl.innerHTML = data.memory.map(m =>
+        `<div class="day-item"><span class="day-bullet">&#9679;</span>${escHtml(m)}</div>`
+      ).join('');
+    } else {
+      memEl.innerHTML = '<div class="day-item-empty">All caught up!</div>';
+    }
+
+    // Blocked
+    if (data.blocked.length) {
+      blockedEl.innerHTML = data.blocked.map(b =>
+        `<div class="day-item"><span class="day-bullet">&#9679;</span>${escHtml(b)}</div>`
+      ).join('');
+    } else {
+      blockedEl.innerHTML = '<div class="day-item-empty">Nothing blocked</div>';
+    }
+  } catch (e) {
+    [calEl, syncEl, memEl, blockedEl].forEach(el => {
+      el.innerHTML = '<div class="day-item-empty">Could not load</div>';
+    });
+  }
+}
+
+/* ─── Phile Briefings ─── */
+let latestPhile = null;
+let speechSynth = window.speechSynthesis;
+let currentUtterance = null;
+
+async function loadLatestPhile() {
+  const summary = document.getElementById('phile-summary');
+  const titleEl = document.getElementById('phile-title');
+  const iconEl = document.getElementById('phile-icon');
+
+  try {
+    const res = await fetch('/api/phile/latest');
+    const data = await res.json();
+    latestPhile = data;
+
+    if (data.exists) {
+      // Set type-specific branding
+      if (data.type === 'golden-hour') {
+        titleEl.textContent = 'Golden Hour';
+        iconEl.innerHTML = '&#127749;'; // sunset emoji
+      } else {
+        titleEl.textContent = 'First Light';
+        iconEl.innerHTML = '&#9728;&#65039;'; // sun emoji
+      }
+
+      // Show TL;DR summary
+      if (data.tldr) {
+        summary.innerHTML = `<div>${marked.parse(data.tldr)}</div>`;
+      } else {
+        // Fallback: show first few lines
+        const lines = data.content.split('\n').filter(l => l.startsWith('- ')).slice(0, 5);
+        summary.innerHTML = '<ul>' + lines.map(l => `<li>${escHtml(l.replace(/^- /, ''))}</li>`).join('') + '</ul>';
+      }
+    } else {
+      const type = data.type || 'first-light';
+      const label = type === 'golden-hour' ? 'Golden Hour' : 'First Light';
+      const icon = type === 'golden-hour' ? '&#127749;' : '&#9728;&#65039;';
+      titleEl.textContent = label;
+      iconEl.innerHTML = icon;
+      summary.innerHTML = `<div class="day-item-empty">No ${label} briefing yet today. Run <code>npm run phile:${type === 'golden-hour' ? 'evening' : 'morning'}</code> to generate one.</div>`;
+      document.getElementById('phile-audio-btn').style.display = 'none';
+      document.getElementById('phile-open-btn').style.display = 'none';
+    }
+  } catch (e) {
+    summary.innerHTML = '<div class="day-item-empty">Could not load briefing</div>';
+  }
+}
+
+function openLatestPhile() {
+  if (!latestPhile || !latestPhile.exists) return;
+  // Switch to Philes source and open the file
+  const sourceName = sourcesInfo.find(s => s.name === 'Philes') ? 'Philes' : 'Philo';
+  switchSource(sourceName).then(() => {
+    const doc = allDocs.find(d => d.path === latestPhile.path);
+    if (doc) openDoc(doc);
+    else {
+      // File might not be in the tree yet (just generated) — open by direct fetch
+      openDoc({ name: latestPhile.filename.replace('.md', ''), path: latestPhile.path, source: sourceName });
+    }
+  });
+}
+
+function readPhileAloud() {
+  const btn = document.getElementById('phile-audio-btn');
+
+  // If currently speaking, stop
+  if (speechSynth.speaking) {
+    speechSynth.cancel();
+    btn.classList.remove('playing');
+    btn.innerHTML = '&#128264; Listen';
+    return;
+  }
+
+  if (!latestPhile || !latestPhile.content) return;
+
+  // Strip markdown formatting for clean speech
+  let text = latestPhile.content
+    .replace(/^#+ /gm, '')           // headers
+    .replace(/\*\*/g, '')            // bold
+    .replace(/\*/g, '')              // italic
+    .replace(/`[^`]*`/g, '')        // inline code
+    .replace(/```[\s\S]*?```/g, '')  // code blocks
+    .replace(/\[([^\]]+)\]\([^)]+\)/g, '$1') // links
+    .replace(/^[-*] /gm, '')        // list bullets
+    .replace(/^> /gm, '')           // blockquotes
+    .replace(/---/g, '')             // hr
+    .replace(/\|[^|\n]+\|/g, '')    // tables
+    .replace(/\n{3,}/g, '\n\n')     // excess newlines
+    .trim();
+
+  currentUtterance = new SpeechSynthesisUtterance(text);
+  currentUtterance.rate = 0.95;
+  currentUtterance.pitch = 1.0;
+
+  // Try to use a nice voice
+  const voices = speechSynth.getVoices();
+  const preferred = voices.find(v => v.name.includes('Samantha')) ||
+                    voices.find(v => v.name.includes('Karen')) ||
+                    voices.find(v => v.lang.startsWith('en') && v.localService);
+  if (preferred) currentUtterance.voice = preferred;
+
+  currentUtterance.onstart = () => {
+    btn.classList.add('playing');
+    btn.innerHTML = '&#9209; Stop';
+  };
+  currentUtterance.onend = () => {
+    btn.classList.remove('playing');
+    btn.innerHTML = '&#128264; Listen';
+  };
+  currentUtterance.onerror = () => {
+    btn.classList.remove('playing');
+    btn.innerHTML = '&#128264; Listen';
+  };
+
+  speechSynth.speak(currentUtterance);
+}
+
+// Pre-load voices (some browsers need this)
+if (speechSynth) speechSynth.getVoices();
+
+/* ─── Recently Viewed (localStorage) ─── */
+function getRecentViewed() { try { return JSON.parse(localStorage.getItem('philo-md-recent') || '[]'); } catch { return []; } }
+
+function addRecentViewed(doc) {
+  let recent = getRecentViewed();
+  recent = recent.filter(r => !(r.source === (doc.source || currentSource) && r.path === doc.path));
+  recent.unshift({ source: doc.source || currentSource, path: doc.path, name: doc.name, ts: Date.now() });
+  if (recent.length > 15) recent = recent.slice(0, 15);
+  localStorage.setItem('philo-md-recent', JSON.stringify(recent));
+}
+
+function renderRecentViewed() {
+  const el = document.getElementById('dash-recent');
+  const recent = getRecentViewed().slice(0, 8);
+  if (!recent.length) { el.innerHTML = '<div class="recent-empty">No docs viewed yet. Start exploring!</div>'; return; }
+  el.innerHTML = recent.map(r => {
+    const srcClass = SOURCE_COLORS[r.source] || 'src-default';
+    return `<div class="recent-item" onclick="switchSource('${r.source}');setTimeout(()=>{const d=allDocs.find(x=>x.path==='${r.path.replace(/'/g,"\\'")}');if(d)openDoc(d);},300)">
+      <span class="recent-source ${srcClass}">${r.source}</span>
+      <span>${escHtml(r.name)}</span>
+      <span class="recent-time">${timeAgo(r.ts)}</span>
+    </div>`;
+  }).join('');
+}
+
+function timeAgo(ts) {
+  const diff = Date.now() - ts;
+  const mins = Math.floor(diff / 60000);
+  if (mins < 1) return 'just now';
+  if (mins < 60) return `${mins}m ago`;
+  const hrs = Math.floor(mins / 60);
+  if (hrs < 24) return `${hrs}h ago`;
+  return `${Math.floor(hrs / 24)}d ago`;
+}
+
+/* ─── Recently Modified ─── */
+async function loadRecentModified() {
+  const el = document.getElementById('dash-modified');
+  try {
+    const res = await fetch('/api/recent?limit=8');
+    const docs = await res.json();
+    if (!docs.length) { el.innerHTML = '<div class="recent-empty">No recent changes</div>'; return; }
+    el.innerHTML = docs.map(d => {
+      const srcClass = SOURCE_COLORS[d.source] || 'src-default';
+      return `<div class="modified-item" onclick="switchSource('${d.source}');setTimeout(()=>{const x=allDocs.find(dd=>dd.path==='${d.path.replace(/'/g,"\\'")}');if(x)openDoc(x);},300)">
+        <span class="recent-source ${srcClass}">${d.source}</span>
+        <span class="modified-name">${escHtml(d.name)}</span>
+        <span class="modified-time">${timeAgo(new Date(d.modified).getTime())}</span>
+      </div>`;
+    }).join('');
+  } catch { el.innerHTML = '<div class="recent-empty">Could not load</div>'; }
+}
+
+/* ─── To-Do List ─── */
+function getTodos() { try { return JSON.parse(localStorage.getItem('philo-md-todos') || '[]'); } catch { return []; } }
+function saveTodos(t) { localStorage.setItem('philo-md-todos', JSON.stringify(t)); }
+
+function renderTodos() {
+  const el = document.getElementById('todo-list');
+  const todos = getTodos();
+  if (!todos.length) { el.innerHTML = ''; return; }
+  el.innerHTML = todos.map((t, i) =>
+    `<div class="todo-item ${t.done ? 'done' : ''}">
+      <button class="todo-check" onclick="toggleTodo(${i})">${t.done ? '&#10003;' : ''}</button>
+      <span class="todo-text">${escHtml(t.text)}</span>
+      <button class="todo-delete" onclick="deleteTodo(${i})" title="Delete">&#215;</button>
+    </div>`
+  ).join('');
+}
+
+function addTodo(text) {
+  if (!text.trim()) return;
+  const todos = getTodos();
+  todos.push({ id: Date.now(), text: text.trim(), done: false });
+  saveTodos(todos);
+  renderTodos();
+}
+function toggleTodo(i) { const t = getTodos(); if (t[i]) { t[i].done = !t[i].done; saveTodos(t); renderTodos(); } }
+function deleteTodo(i) { const t = getTodos(); t.splice(i, 1); saveTodos(t); renderTodos(); }
+function todoKeydown(e) { if (e.key === 'Enter') { addTodo(e.target.value); e.target.value = ''; } }
+function escHtml(s) { const d = document.createElement('div'); d.textContent = s; return d.innerHTML; }
+
+/* ─── Document viewer ─── */
+async function openDoc(doc) {
+  const source = doc.source || currentSource;
+  document.querySelectorAll('.sidebar-item').forEach(el => el.classList.remove('active'));
+  const el = document.querySelector(`.sidebar-item[data-path="${doc.path}"]`);
+  if (el) el.classList.add('active');
+  location.hash = `source=${encodeURIComponent(source)}&path=${encodeURIComponent(doc.path)}`;
+
+  try {
+    const res = await fetch(`/api/md-read?source=${encodeURIComponent(source)}&path=${encodeURIComponent(doc.path)}`);
+    const data = await res.json();
+    if (!data.ok) throw new Error(data.error);
+
+    currentContent = data.content;
+    addRecentViewed({ ...doc, source });
+
+    document.getElementById('dashboard').classList.remove('visible');
+    document.getElementById('portpholio').classList.remove('visible');
+    document.getElementById('empty').style.display = 'none';
+    const body = document.getElementById('md-body');
+    body.style.display = 'block';
+    body.innerHTML = marked.parse(data.content);
+
+    body.querySelectorAll('a[href]').forEach(a => {
+      const href = a.getAttribute('href');
+      if (href.endsWith('.md') && !href.startsWith('http')) {
+        a.addEventListener('click', e => {
+          e.preventDefault();
+          const currentDir = doc.path.includes('/') ? doc.path.substring(0, doc.path.lastIndexOf('/')) : '';
+          const targetPath = currentDir ? `${currentDir}/${href}` : href;
+          const target = allDocs.find(d => d.path === targetPath || d.path.endsWith(href));
+          if (target) openDoc(target);
+        });
+      }
+    });
+
+    document.getElementById('toolbar').style.display = 'flex';
+    document.getElementById('doc-title').textContent = data.name;
+    document.getElementById('doc-path').textContent = `${source} / ${data.path}`;
+    document.getElementById('content-wrap').scrollTop = 0;
+    if (window.innerWidth <= 768) document.getElementById('sidebar').classList.add('hidden');
+  } catch (e) {
+    document.getElementById('md-body').style.display = 'block';
+    document.getElementById('md-body').innerHTML = `<p style="color:var(--terracotta)">Error: ${e.message}</p>`;
+  }
+}
+
+/* ─── PortPholio ─── */
+const PP_TYPE_CONFIG = {
+  whitepaper: { icon: '&#128220;', label: 'White Paper', iconClass: 'type-whitepaper', tagClass: 'tag-whitepaper' },
+  research:   { icon: '&#128269;', label: 'Research',    iconClass: 'type-research',   tagClass: 'tag-research' },
+  proposal:   { icon: '&#128176;', label: 'Proposal',    iconClass: 'type-proposal',   tagClass: 'tag-proposal' },
+  report:     { icon: '&#128202;', label: 'Report',      iconClass: 'type-report',     tagClass: 'tag-report' },
+  other:      { icon: '&#128196;', label: 'Document',    iconClass: 'type-other',      tagClass: 'tag-other' },
+};
+
+function classifyDeliverable(name, content) {
+  const lower = (name + ' ' + content.slice(0, 500)).toLowerCase();
+  if (lower.includes('white paper') || lower.includes('white-paper') || lower.includes('whitepaper')) return 'whitepaper';
+  if (lower.includes('proposal') || lower.includes('partnership') || lower.includes('pricing model')) return 'proposal';
+  if (lower.includes('report') || lower.includes('analysis') || lower.includes('financial')) return 'report';
+  if (lower.includes('research') || lower.includes('competitor') || lower.includes('intelligence') || lower.includes('deep dive')) return 'research';
+  return 'other';
+}
+
+function extractSummary(content) {
+  // Try to find ## Executive Summary or ## Summary
+  const summaryMatch = content.match(/##\s*(?:Executive\s+)?Summary\s*\n+([\s\S]*?)(?=\n##|\n---)/i);
+  if (summaryMatch) {
+    const text = summaryMatch[1].replace(/\*\*/g, '').replace(/\|[^\n]+/g, '').replace(/\n+/g, ' ').trim();
+    return text.slice(0, 250) + (text.length > 250 ? '...' : '');
+  }
+  // Fallback: first real paragraph
+  const lines = content.split('\n').filter(l => l.trim() && !l.startsWith('#') && !l.startsWith('|') && !l.startsWith('-') && !l.startsWith('*') && !l.startsWith('>') && !l.startsWith('---'));
+  const first = lines.slice(0, 3).join(' ').replace(/\*\*/g, '').trim();
+  return first.slice(0, 250) + (first.length > 250 ? '...' : '');
+}
+
+function extractDate(filename) {
+  const match = filename.match(/(\d{4}-\d{2}-\d{2})/);
+  if (match) {
+    const d = new Date(match[1] + 'T12:00:00');
+    return { raw: match[1], display: d.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' }) };
+  }
+  return { raw: '', display: 'Unknown date' };
+}
+
+function extractTitle(content, filename) {
+  const h1 = content.match(/^#\s+(.+)/m);
+  if (h1) return h1[1].replace(/\*\*/g, '').trim();
+  return filename.replace(/\.md$/, '').replace(/^\d{4}-\d{2}-\d{2}-/, '').replace(/-/g, ' ');
+}
+
+async function showPortPholio() {
+  currentSource = null;
+  setActiveTab(null);
+  document.querySelector('.source-tab[data-source="portpholio"]')?.classList.add('active');
+
+  // Hide everything else
+  document.getElementById('dashboard').classList.remove('visible');
+  document.getElementById('empty').style.display = 'none';
+  document.getElementById('md-body').style.display = 'none';
+  document.getElementById('toolbar').style.display = 'none';
+  document.getElementById('portpholio').classList.add('visible');
+  document.getElementById('browse-path').textContent = 'PortPholio';
+  location.hash = 'portpholio';
+
+  // Fetch deliverables
+  try {
+    const res = await fetch('/api/portpholio');
+    const items = await res.json();
+    renderPortPholio(items);
+  } catch (e) {
+    document.getElementById('pp-content').innerHTML = '<div class="pp-empty"><div class="pp-empty-icon">&#128218;</div><div class="pp-empty-title">Couldn\'t load PortPholio</div><div class="pp-empty-msg">' + e.message + '</div></div>';
+  }
+}
+
+function renderPortPholio(items) {
+  if (!items.length) {
+    document.getElementById('pp-content').innerHTML = '<div class="pp-empty"><div class="pp-empty-icon">&#128218;</div><div class="pp-empty-title">Nothing here yet</div><div class="pp-empty-msg">When Philo creates deliverables (white papers, research, proposals), they\'ll appear here.</div></div>';
+    document.getElementById('pp-stats').innerHTML = '';
+    return;
+  }
+
+  // Group by type
+  const grouped = {};
+  for (const item of items) {
+    if (!grouped[item.type]) grouped[item.type] = [];
+    grouped[item.type].push(item);
+  }
+
+  // Stats
+  const totalDocs = items.length;
+  const totalPdfs = items.filter(i => i.hasPdf).length;
+  const types = Object.keys(grouped).length;
+  document.getElementById('pp-stats').innerHTML = `
+    <div class="pp-stat"><span class="pp-stat-num">${totalDocs}</span> deliverables</div>
+    <div class="pp-stat"><span class="pp-stat-num">${totalPdfs}</span> PDFs</div>
+    <div class="pp-stat"><span class="pp-stat-num">${types}</span> ${types === 1 ? 'category' : 'categories'}</div>
+  `;
+
+  // Render sections in a nice order
+  const typeOrder = ['whitepaper', 'research', 'proposal', 'report', 'other'];
+  let html = '';
+
+  for (const type of typeOrder) {
+    const group = grouped[type];
+    if (!group || !group.length) continue;
+
+    const cfg = PP_TYPE_CONFIG[type] || PP_TYPE_CONFIG.other;
+    html += `<div class="pp-section">`;
+    html += `<div class="pp-section-title"><span class="pp-section-icon">${cfg.icon}</span> ${cfg.label}s <span class="pp-section-count">${group.length}</span></div>`;
+
+    for (const item of group) {
+      const icfg = PP_TYPE_CONFIG[item.type] || PP_TYPE_CONFIG.other;
+      html += `<div class="pp-card">
+        <div class="pp-card-icon ${icfg.iconClass}">${icfg.icon}</div>
+        <div class="pp-card-body">
+          <div class="pp-card-title">${item.title}</div>
+          <div class="pp-card-meta">
+            <span class="pp-tag ${icfg.tagClass}">${icfg.label}</span>
+            <span>&#128197; ${item.dateDisplay}</span>
+            ${item.hasPdf ? '<span>&#128196; PDF available</span>' : ''}
+          </div>
+          <div class="pp-card-summary">${item.summary}</div>
+          <div class="pp-card-actions">
+            <button class="pp-btn pp-btn-primary" onclick="ppOpenMarkdown('${item.source}', '${item.path.replace(/'/g, "\\'")}')">&#128196; Read</button>
+            ${item.hasPdf ? `<button class="pp-btn" onclick="ppOpenPdf('${item.pdfUrl}')">&#128462; Open PDF</button>` : ''}
+          </div>
+        </div>
+      </div>`;
+    }
+    html += `</div>`;
+  }
+
+  document.getElementById('pp-content').innerHTML = html;
+}
+
+function ppOpenMarkdown(source, path) {
+  const doc = { path, source, name: path.split('/').pop().replace('.md', '') };
+  openDoc(doc);
+  document.getElementById('portpholio').classList.remove('visible');
+}
+
+function ppOpenPdf(url) {
+  window.open(url, '_blank');
+}
+
+/* ─── Zoom ─── */
+let mdScale = 1.0;
+function mdZoom(d) {
+  mdScale = Math.min(1.8, Math.max(0.6, mdScale + d));
+  document.getElementById('md-body').style.zoom = mdScale;
+  document.getElementById('zoom-label').textContent = Math.round(mdScale * 100) + '%';
+}
+
+/* ─── Clipboard ─── */
+function copyRaw() {
+  navigator.clipboard.writeText(currentContent).then(() => {
+    const btn = event.target; btn.textContent = 'Copied!';
+    setTimeout(() => btn.textContent = 'Copy Raw', 1500);
+  });
+}
+function copyLink() {
+  navigator.clipboard.writeText(window.location.href).then(() => {
+    const btn = event.target; btn.textContent = 'Copied!';
+    setTimeout(() => btn.textContent = 'Copy Link', 1500);
+  });
+}
+function toggleSidebar() { document.getElementById('sidebar').classList.toggle('hidden'); }
+
+/* ─── Init ─── */
+async function init() {
+  startSunCheck();
+
+  try {
+    const srcRes = await fetch('/api/sources');
+    sourcesInfo = await srcRes.json();
+    buildSourceTabs();
+
+    const hash = location.hash.slice(1);
+    const params = new URLSearchParams(hash);
+    const hashSource = params.get('source');
+    const hashPath = params.get('path');
+
+    if (hash === 'portpholio') {
+      showPortPholio();
+    } else if (hashSource && sourcesInfo.find(s => s.name === hashSource)) {
+      await switchSource(hashSource);
+      if (hashPath) {
+        const doc = allDocs.find(d => d.path === hashPath);
+        if (doc) openDoc(doc);
+      }
+    } else if (hash && !hash.includes('=')) {
+      if (sourcesInfo.length) {
+        await switchSource(sourcesInfo[0].name);
+        const doc = allDocs.find(d => d.path === decodeURIComponent(hash));
+        if (doc) openDoc(doc);
+      }
+    } else {
+      showDashboard();
+    }
+  } catch (e) {
+    document.getElementById('sidebar-list').innerHTML =
+      '<p style="padding:20px;font-size:13px;color:rgba(255,200,200,0.7)">Failed to connect to server</p>';
+  }
+}
+
+document.addEventListener('keydown', e => {
+  if ((e.metaKey || e.ctrlKey) && e.key === 'k') { e.preventDefault(); document.getElementById('sidebar-search').focus(); }
+  if (e.key === 'Escape') {
+    const s = document.getElementById('sidebar-search');
+    if (document.activeElement === s) { s.value = ''; filterList(''); s.blur(); }
+  }
+});
+
+init();
+</script>
+</body>
+</html>
