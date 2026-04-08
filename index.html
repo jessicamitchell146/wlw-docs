@@ -65,7 +65,7 @@
 
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Philo MD Browser</title>
+<title>WLW Docs — Philo MD Browser</title>
 <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
 <style>
   /* ─── Light Mode (default) ─── */
@@ -690,14 +690,15 @@
     <span id="zoom-label">100%</span>
     <button class="zoom-btn" onclick="mdZoom(.1)" title="Zoom in">+</button>
     <span id="doc-path"></span>
-    <button class="toolbar-btn" onclick="copyRaw()">Copy Raw</button>
-    <button class="toolbar-btn" onclick="copyLink()">Copy Link</button>
+    <button class="toolbar-btn" onclick="copyRaw(this)">Copy Raw</button>
+    <button class="toolbar-btn" onclick="copyLink(this)">Copy Link</button>
   </div>
   <div id="content-wrap">
     <div id="dashboard">
       <div class="dash-greeting">
         <h1 id="dash-hello">Hello, Jessica</h1>
         <div class="dash-date" id="dash-date"></div>
+        <div id="build-stamp" style="font-size:11px;color:var(--text-sec);opacity:0.6;margin-top:6px;display:none"></div>
         <div class="dash-accent-line"></div>
       </div>
       <div class="dash-grid">
@@ -1001,7 +1002,7 @@ async function switchSource(name) {
   document.getElementById('empty').style.display = 'flex';
   location.hash = `source=${encodeURIComponent(name)}`;
 
-  if (window.innerWidth <= 768) document.getElementById('sidebar').classList.remove('hidden');
+  if (window.innerWidth <= 768) document.getElementById('sidebar').classList.add('hidden');
 }
 
 /* ─── Dashboard ─── */
@@ -1180,7 +1181,10 @@ async function loadLatestPhile() {
       const icon = type === 'golden-hour' ? '&#127749;' : '&#9728;&#65039;';
       titleEl.textContent = label;
       iconEl.innerHTML = icon;
-      summary.innerHTML = `<div class="day-item-empty">No ${label} briefing yet today. Run <code>npm run phile:${type === 'golden-hour' ? 'evening' : 'morning'}</code> to generate one.</div>`;
+      const isStatic = !!document.getElementById('build-stamp')?.textContent;
+      summary.innerHTML = isStatic
+        ? `<div class="day-item-empty">Briefings are available when running locally. Use <code>npm run browse:wlw</code> for live data.</div>`
+        : `<div class="day-item-empty">No ${label} briefing yet today. Run <code>npm run phile:${type === 'golden-hour' ? 'evening' : 'morning'}</code> to generate one.</div>`;
       document.getElementById('phile-audio-btn').style.display = 'none';
       document.getElementById('phile-open-btn').style.display = 'none';
     }
@@ -1501,13 +1505,13 @@ function renderPortPholio(items) {
       html += `<div class="pp-card">
         <div class="pp-card-icon ${icfg.iconClass}">${icfg.icon}</div>
         <div class="pp-card-body">
-          <div class="pp-card-title">${item.title}</div>
+          <div class="pp-card-title">${escHtml(item.title)}</div>
           <div class="pp-card-meta">
             <span class="pp-tag ${icfg.tagClass}">${icfg.label}</span>
-            <span>&#128197; ${item.dateDisplay}</span>
+            <span>&#128197; ${escHtml(item.dateDisplay)}</span>
             ${item.hasPdf ? '<span>&#128196; PDF available</span>' : ''}
           </div>
-          <div class="pp-card-summary">${item.summary}</div>
+          <div class="pp-card-summary">${escHtml(item.summary)}</div>
           <div class="pp-card-actions">
             <button class="pp-btn pp-btn-primary" onclick="ppOpenMarkdown('${item.source}', '${item.path.replace(/'/g, "\\'")}')">&#128196; Read</button>
             ${item.hasPdf ? `<button class="pp-btn" onclick="ppOpenPdf('${item.pdfUrl}')">&#128462; Open PDF</button>` : ''}
@@ -1523,6 +1527,8 @@ function renderPortPholio(items) {
 
 function ppOpenMarkdown(source, path) {
   const doc = { path, source, name: path.split('/').pop().replace('.md', '') };
+  currentSource = source;
+  setActiveTab(source);
   openDoc(doc);
   document.getElementById('portpholio').classList.remove('visible');
 }
@@ -1540,15 +1546,15 @@ function mdZoom(d) {
 }
 
 /* ─── Clipboard ─── */
-function copyRaw() {
+function copyRaw(btn) {
   navigator.clipboard.writeText(currentContent).then(() => {
-    const btn = event.target; btn.textContent = 'Copied!';
+    btn.textContent = 'Copied!';
     setTimeout(() => btn.textContent = 'Copy Raw', 1500);
   });
 }
-function copyLink() {
+function copyLink(btn) {
   navigator.clipboard.writeText(window.location.href).then(() => {
-    const btn = event.target; btn.textContent = 'Copied!';
+    btn.textContent = 'Copied!';
     setTimeout(() => btn.textContent = 'Copy Link', 1500);
   });
 }
@@ -1557,6 +1563,17 @@ function toggleSidebar() { document.getElementById('sidebar').classList.toggle('
 /* ─── Init ─── */
 async function init() {
   startSunCheck();
+
+  // Show build timestamp if running in static mode
+  try {
+    const _d = await fetch('data.json').then(r => r.ok ? r.json() : null).catch(() => null);
+    if (_d && _d.buildTime) {
+      const bt = new Date(_d.buildTime);
+      const el = document.getElementById('build-stamp');
+      el.textContent = 'Data snapshot from ' + bt.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric', hour: 'numeric', minute: '2-digit' });
+      el.style.display = 'block';
+    }
+  } catch {}
 
   try {
     const srcRes = await fetch('/api/sources');
